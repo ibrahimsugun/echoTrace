@@ -1,186 +1,213 @@
+import sys
 import numpy as np
-import matplotlib.pyplot as plt
+from PyQt5 import QtCore, QtWidgets
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
+                             QWidget, QPushButton, QTextEdit, QLabel)
+from PyQt5.QtCore import Qt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 from scipy.optimize import minimize
-from matplotlib.widgets import Button
-import matplotlib
+from scipy import signal  # Sinyal işleme kütüphanesi
 
 # Ses hızı
 SOUND_SPEED = 343
 
-# Mikrofonların başlangıç konumları
-mic_positions = np.array([
-    [0, 0],    # Mikrofon 1
-    [10, 0],   # Mikrofon 2
-    [0, 10],   # Mikrofon 3
-    [10, 10]   # Mikrofon 4
-])
+class SoundSourceLocalization(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('Ses Kaynağı Simülasyonu')
+        self.setGeometry(100, 100, 1200, 800)
 
-# Ses kaynağı ve tahmin edilen nokta (Başlangıçta boş)
-source_point = None
-estimated_point = None
-calculation_steps = ""  # Hesaplama adımlarını tutacak değişken
+        # Mikrofonların başlangıç konumları
+        self.default_mic_positions = np.array([
+            [0, 0],    # Mikrofon 1
+            [5, 0],    # Mikrofon 2
+            [10, 0],   # Mikrofon 3
+            [0, 5],    # Mikrofon 4
+            [10, 5],   # Mikrofon 5
+            [0, 10],   # Mikrofon 6
+            [5, 10],   # Mikrofon 7
+            [10, 10]   # Mikrofon 8
+        ])
+        self.mic_positions = np.copy(self.default_mic_positions)
+        self.source_point = None
+        self.estimated_point = None
+        self.calculation_steps = ""
+        self.picked_mic = None
 
-def calculate_distance(mic_pos, source_pos):
-    """Mikrofon ile ses kaynağı arasındaki mesafeyi hesaplar."""
-    distance = np.sqrt((mic_pos[0] - source_pos[0]) ** 2 + (mic_pos[1] - source_pos[1]) ** 2)
-    return distance
+        self.initUI()
+        self.update_plot()
 
-def tdoa_loss(source_pos, mic_positions, time_stamps):
-    """Tüm mikrofon çiftleri arasındaki zaman farklarını kullanan kayıp fonksiyonu."""
-    total_loss = 0.0
-    steps = []  # Hesaplama adımlarını kaydetmek için liste
-    num_mics = len(mic_positions)
-    for i in range(num_mics):
-        for j in range(i + 1, num_mics):
-            # Gerçek mesafe farkı
-            observed_delta_d = (time_stamps[i] - time_stamps[j]) * SOUND_SPEED
+    def initUI(self):
+        # Ana widget ve layout
+        self.main_widget = QWidget(self)
+        self.setCentralWidget(self.main_widget)
+        layout = QHBoxLayout(self.main_widget)
 
-            # Tahmin edilen mesafe farkı
-            dist_i = calculate_distance(mic_positions[i], source_pos)
-            dist_j = calculate_distance(mic_positions[j], source_pos)
-            predicted_delta_d = dist_i - dist_j
+        # Grafik alanı
+        self.figure = Figure()
+        self.canvas = FigureCanvas(self.figure)
+        self.ax = self.figure.add_subplot(111)
+        self.canvas.mpl_connect('button_press_event', self.on_click)
+        self.canvas.mpl_connect('button_release_event', self.on_release)
+        self.canvas.mpl_connect('motion_notify_event', self.on_motion)
+        self.canvas.mpl_connect('pick_event', self.on_pick)
 
-            # Kayıp hesaplaması
-            residual = observed_delta_d - predicted_delta_d
-            total_loss += residual ** 2
+        # Sağ taraftaki kontrol paneli
+        control_layout = QVBoxLayout()
+        
+        # "Sil" butonu
+        self.clear_button = QPushButton('Sil')
+        self.clear_button.clicked.connect(self.clear)
+        control_layout.addWidget(self.clear_button)
+        
+        # "Sıfırla" butonu - Mikrofon konumlarını sıfırlar
+        self.reset_button = QPushButton('Sıfırla')
+        self.reset_button.clicked.connect(self.reset_mic_positions)
+        control_layout.addWidget(self.reset_button)
 
-            # Hesaplama adımlarını kaydet
-            step_info = (
-                f"Çift ({i+1}, {j+1}):\n"
-                f"  Zaman Farkı (t{i+1} - t{j+1}): {time_stamps[i] - time_stamps[j]:.6f} s\n"
-                f"  Gerçek Mesafe Farkı (d{i+1} - d{j+1}): {observed_delta_d:.6f} m\n"
-                f"  Tahmini Mesafe Farkı: {predicted_delta_d:.6f} m\n"
-                f"  Kalan (Residual): {residual:.6f}\n"
+        self.text_box = QTextEdit()
+        self.text_box.setReadOnly(True)
+        control_layout.addWidget(QLabel("Hesaplama Adımları:"))
+        control_layout.addWidget(self.text_box)
+
+        # Layoutları yerleştirme
+        layout.addWidget(self.canvas, 70)
+        layout.addLayout(control_layout, 30)
+
+    def calculate_distance(self, mic_pos, source_pos):
+        """Mikrofon ile ses kaynağı arasındaki mesafeyi hesaplar."""
+        distance = np.sqrt((mic_pos[0] - source_pos[0]) ** 2 + (mic_pos[1] - source_pos[1]) ** 2)
+        return max(distance, 1e-6)  # Sıfıra çok yakın değerlerde hata önleme
+
+    def apply_low_pass_filter(self, signal_data):
+        """Low-pass filter uygula ve yüksek frekanslı gürültüyü temizle."""
+        nyquist = 0.5 * 44100  # Nyquist frekansı (Örnekleme frekansı)
+        cutoff = 1000  # 1kHz altında gürültüyü filtrele
+        normal_cutoff = cutoff / nyquist
+        
+        # Low-pass Butterworth filtre parametreleri
+        b, a = signal.butter(5, normal_cutoff, btype='low', analog=False)
+        filtered_signal = signal.filtfilt(b, a, signal_data)
+        
+        return filtered_signal
+
+    def tdoa_loss(self, source_pos, mic_positions, time_stamps):
+        """Tüm mikrofon çiftleri arasındaki zaman farklarını kullanan kayıp fonksiyonu."""
+        total_loss = 0.0
+        steps = []
+        num_mics = len(mic_positions)
+        for i in range(num_mics):
+            for j in range(i + 1, num_mics):
+                observed_delta_d = (time_stamps[i] - time_stamps[j]) * SOUND_SPEED
+                dist_i = self.calculate_distance(mic_positions[i], source_pos)
+                dist_j = self.calculate_distance(mic_positions[j], source_pos)
+                predicted_delta_d = dist_i - dist_j
+                residual = observed_delta_d - predicted_delta_d
+                total_loss += residual ** 2
+
+                step_info = (
+                    f"Çift ({i+1}, {j+1}):\n"
+                    f"  Zaman Farkı (t{i+1} - t{j+1}): {time_stamps[i] - time_stamps[j]:.6e} s\n"
+                    f"  Gerçek Mesafe Farkı (d{i+1} - d{j+1}): {observed_delta_d:.6f} m\n"
+                    f"  Tahmini Mesafe Farkı: {predicted_delta_d:.6f} m\n"
+                    f"  Kalan (Residual): {residual:.6f}\n"
+                )
+                steps.append(step_info)
+
+        self.calculation_steps = "\n".join(steps)
+        return total_loss
+
+    def find_sound_source(self, mic_positions, time_stamps):
+        """Ses kaynağının konumunu optimize eder."""
+        initial_guess = np.mean(mic_positions, axis=0)
+        result = minimize(self.tdoa_loss, initial_guess, args=(mic_positions, time_stamps), method='Nelder-Mead')
+        return result.x
+
+    def on_click(self, event):
+        if event.inaxes == self.ax:
+            if event.button == 1:
+                self.source_point = [event.xdata, event.ydata]
+                
+                # Mikrofonlardan gelen verileri simüle edelim (örneğin rastgele gürültü ekleyelim)
+                raw_signals = np.array([self.calculate_distance(mic, self.source_point) / SOUND_SPEED for mic in self.mic_positions])
+                
+                # Gürültü içeren verilerden low-pass filter ile temizlenen sinyal
+                filtered_signals = self.apply_low_pass_filter(raw_signals)
+                
+                # TDOA hesaplamalarını temizlenmiş sinyallerle yap
+                self.estimated_point = self.find_sound_source(self.mic_positions, filtered_signals)
+                
+                self.update_plot()
+                self.text_box.setPlainText(
+                    f"Gerçek Ses Kaynağı: ({self.source_point[0]:.2f}, {self.source_point[1]:.2f})\n"
+                    f"Tahmin Edilen Konum: ({self.estimated_point[0]:.2f}, {self.estimated_point[1]:.2f})\n\n"
+                    f"Hesaplama Adımları:\n{self.calculation_steps}"
+                )
+        else:
+            self.calculation_steps = ""
+            self.text_box.setPlainText("")
+
+    def on_pick(self, event):
+        if event.mouseevent.button == 3 and event.ind is not None:
+            self.picked_mic = event.ind[0]
+
+    def on_motion(self, event):
+        if self.picked_mic is not None and event.inaxes == self.ax:
+            self.mic_positions[self.picked_mic] = [event.xdata, event.ydata]
+            self.update_plot()
+
+    def on_release(self, event):
+        if self.picked_mic is not None and self.source_point is not None:
+            time_stamps = np.array([self.calculate_distance(mic, self.source_point) / SOUND_SPEED for mic in self.mic_positions])
+            self.estimated_point = self.find_sound_source(self.mic_positions, time_stamps)
+            self.update_plot()
+            self.text_box.setPlainText(
+                f"Gerçek Ses Kaynağı: ({self.source_point[0]:.2f}, {self.source_point[1]:.2f})\n"
+                f"Tahmin Edilen Konum: ({self.estimated_point[0]:.2f}, {self.estimated_point[1]:.2f})\n\n"
+                f"Hesaplama Adımları:\n{self.calculation_steps}"
             )
-            steps.append(step_info)
+        self.picked_mic = None
 
-    # Hesaplama adımlarını global değişkene aktar
-    global calculation_steps
-    calculation_steps = "\n".join(steps)
+    def update_plot(self):
+        self.ax.clear()
+        self.ax.set_title('Ses Kaynağı Simülasyonu')
+        self.ax.set_xlabel('X Koordinatı')
+        self.ax.set_ylabel('Y Koordinatı')
+        xlim = [-10, 20]
+        ylim = [-10, 20]
+        self.ax.set_xlim(xlim)
+        self.ax.set_ylim(ylim)
+        self.ax.set_xticks(np.arange(-10, 21, 5))
+        self.ax.set_yticks(np.arange(-10, 21, 5))
+        self.ax.grid(True)
 
-    return total_loss
+        scatter = self.ax.scatter(self.mic_positions[:, 0], self.mic_positions[:, 1], color='blue', label="Mikrofonlar", picker=True, s=100)
+        for i, pos in enumerate(self.mic_positions):
+            self.ax.text(pos[0], pos[1], f'M{i+1}', fontsize=12, ha='right', va='bottom')
 
-def find_sound_source(mic_positions, time_stamps):
-    """Ses kaynağının konumunu optimize eder."""
-    initial_guess = [5, 5]  # Başlangıç tahmini
+        if self.source_point is not None:
+            self.ax.scatter(*self.source_point, color='red', label="Gerçek Ses Kaynağı", s=200)
+        if self.estimated_point is not None:
+            self.ax.scatter(*self.estimated_point, color='green', label="Tahmin Edilen Ses Kaynağı", s=100)
+        self.ax.legend()
+        self.canvas.draw()
 
-    result = minimize(tdoa_loss, initial_guess, args=(mic_positions, time_stamps), method='Nelder-Mead')
+    def clear(self):
+        """Ses kaynağı ve tahmin edilen noktaları siler."""
+        self.source_point = None
+        self.estimated_point = None
+        self.calculation_steps = ""
+        self.text_box.setPlainText("")
+        self.update_plot()
 
-    return result.x  # Tahmin edilen ses kaynağının koordinatları
+    def reset_mic_positions(self):
+        """Mikrofon konumlarını varsayılan pozisyonlarına sıfırlar."""
+        self.mic_positions = np.copy(self.default_mic_positions)
+        self.clear()  # Ses kaynağı ve tahminleri de sıfırlar
 
-def on_click(event):
-    global source_point, estimated_point, calculation_steps
-    # Sol tıklama ile ses kaynağı belirlenir
-    if event.inaxes == ax and event.button == 1:
-        source_point = [event.xdata, event.ydata]
-        time_stamps = np.array([calculate_distance(mic, source_point) / SOUND_SPEED for mic in mic_positions])
-        estimated_point = find_sound_source(mic_positions, time_stamps)
-        update_plot()
-        # Hesaplama adımlarını metin alanında güncelle
-        text_box.set_text(f"Gerçek Ses Kaynağı: ({source_point[0]:.2f}, {source_point[1]:.2f})\n"
-                          f"Tahmin Edilen Konum: ({estimated_point[0]:.2f}, {estimated_point[1]:.2f})\n\n"
-                          f"Hesaplama Adımları:\n{calculation_steps}")
-    else:
-        # Metin alanını temizle
-        calculation_steps = ""
-        text_box.set_text("")
-
-def on_pick(event):
-    """Mikrofon noktalarını sürüklemek için olayları yakalar."""
-    global picked_mic
-    # Sadece sağ tıklama ile sürüklemeye izin veriyoruz
-    if event.mouseevent.button == 3:
-        picked_mic = event.ind[0]
-
-def on_motion(event):
-    """Sürükleme sırasında mikrofonun konumunu günceller."""
-    if picked_mic is not None and event.inaxes == ax:
-        mic_positions[picked_mic] = [event.xdata, event.ydata]
-        update_plot()
-
-def on_release(event):
-    """Sürükleme işlemini sonlandırır."""
-    global picked_mic
-    picked_mic = None
-    # Eğer ses kaynağı seçilmişse, hesaplamaları güncelle
-    if source_point is not None:
-        time_stamps = np.array([calculate_distance(mic, source_point) / SOUND_SPEED for mic in mic_positions])
-        estimated_point = find_sound_source(mic_positions, time_stamps)
-        update_plot()
-        # Metin alanını güncelle
-        text_box.set_text(f"Gerçek Ses Kaynağı: ({source_point[0]:.2f}, {source_point[1]:.2f})\n"
-                          f"Tahmin Edilen Konum: ({estimated_point[0]:.2f}, {estimated_point[1]:.2f})\n\n"
-                          f"Hesaplama Adımları:\n{calculation_steps}")
-
-def update_plot():
-    """Grafiği günceller ve ses kaynağı ile tahmini konumu gösterir."""
-    ax.clear()
-
-    # Mikrofonları göster ve sürüklenebilir hale getir
-    scatter = ax.scatter(mic_positions[:, 0], mic_positions[:, 1], color='blue', label="Mikrofonlar", picker=True, s=100)
-    for i, pos in enumerate(mic_positions):
-        ax.text(pos[0], pos[1], f'M{i+1}', fontsize=12, ha='right', va='bottom')
-
-    # Eğer ses kaynağı seçilmişse göster (Kırmızı nokta, büyük boyutta)
-    if source_point is not None:
-        ax.scatter(*source_point, color='red', label="Gerçek Ses Kaynağı", s=200)  # Kırmızı nokta büyük boyut
-
-    # Tahmin edilen ses kaynağını göster (Yeşil nokta, daha küçük boyutta)
-    if estimated_point is not None:
-        ax.scatter(*estimated_point, color='green', label="Tahmin Edilen Ses Kaynağı", s=100)  # Yeşil nokta küçük boyut
-
-    # Eksen ayarları
-    xlim = [-20, 30]
-    ylim = [-20, 30]
-    ax.set_xlim(xlim)
-    ax.set_ylim(ylim)
-    ax.set_xticks(np.arange(-20, 31, 5))  # X ekseninde 5 birimde bir çizgi
-    ax.set_yticks(np.arange(-20, 31, 5))  # Y ekseninde 5 birimde bir çizgi
-    ax.grid(True)
-    ax.set_xlabel('X Koordinatı')
-    ax.set_ylabel('Y Koordinatı')
-
-    ax.set_title('Ses Kaynağı Simülasyonu')
-    ax.legend()
-    plt.draw()
-
-def clear(event):
-    """Tüm işaretleri ve metin alanını temizler."""
-    global source_point, estimated_point, calculation_steps
-    source_point = None
-    estimated_point = None
-    calculation_steps = ""
-    text_box.set_text("")
-    update_plot()
-
-# Grafik oluşturma
-fig = plt.figure(figsize=(12, 8))
-gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
-
-# Grafik eksenleri
-ax = fig.add_subplot(gs[0])
-ax_text = fig.add_subplot(gs[1])
-ax_text.axis('off')  # Metin alanında eksenleri gizle
-
-# Metin kutusu oluşturma
-text_box = ax_text.text(0, 1, "", fontsize=10, va='top', ha='left')
-
-plt.subplots_adjust(bottom=0.2)
-
-# "Sil" butonunu ekleyin
-ax_clear = plt.axes([0.3, 0.05, 0.1, 0.075])
-button_clear = Button(ax_clear, 'Sil')
-button_clear.on_clicked(clear)
-
-# Global değişkenler
-picked_mic = None
-
-# Olayları bağlama
-fig.canvas.mpl_connect('button_press_event', on_click)
-fig.canvas.mpl_connect('pick_event', on_pick)
-fig.canvas.mpl_connect('motion_notify_event', on_motion)
-fig.canvas.mpl_connect('button_release_event', on_release)
-
-# Başlangıç grafiği
-update_plot()
-plt.show()
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ex = SoundSourceLocalization()
+    ex.show()
+    sys.exit(app.exec_())
