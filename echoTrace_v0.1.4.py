@@ -6,42 +6,60 @@ from matplotlib.widgets import Button
 # Ses hızı
 SOUND_SPEED = 343
 
-# Mikrofonların konumları (Aynı kaldı)
+# Mikrofonların konumları
 mic_positions = np.array([
-    [0, 0],    # Sol alt
-    [10, 0],   # Sağ alt
-    [0, 10],   # Sol üst
-    [10, 10]   # Sağ üst
+    [0, 0],    # Mikrofon 1
+    [10, 0],   # Mikrofon 2
+    [0, 10],   # Mikrofon 3
+    [10, 10]   # Mikrofon 4
 ])
 
 # Ses kaynağı ve tahmin edilen nokta (Başlangıçta boş)
 source_point = None
 estimated_point = None
+calculation_steps = ""  # Hesaplama adımlarını tutacak değişken
 
 def calculate_distance(mic_pos, source_pos):
     """Mikrofon ile ses kaynağı arasındaki mesafeyi hesaplar."""
-    return np.sqrt((mic_pos[0] - source_pos[0]) ** 2 + (mic_pos[1] - source_pos[1]) ** 2)
+    distance = np.sqrt((mic_pos[0] - source_pos[0]) ** 2 + (mic_pos[1] - source_pos[1]) ** 2)
+    return distance
 
 def time_to_distance(time, sound_speed):
     """Zaman farkını mesafeye çevirir."""
     return time * sound_speed
 
 def tdoa_loss(source_pos, mic_positions, time_stamps):
-    """Ses kaynağı koordinatlarının tahmini için kayıp fonksiyonu."""
-    ref_mic_pos = mic_positions[0]  # Referans mikrofon
+    """Tüm mikrofon çiftleri arasındaki zaman farklarını kullanan kayıp fonksiyonu."""
     total_loss = 0.0
-    for i in range(1, len(mic_positions)):
-        # Gerçek mesafe farkı
-        observed_delta_d = (time_stamps[i] - time_stamps[0]) * SOUND_SPEED
+    steps = []  # Hesaplama adımlarını kaydetmek için liste
+    num_mics = len(mic_positions)
+    for i in range(num_mics):
+        for j in range(i + 1, num_mics):
+            # Gerçek mesafe farkı
+            observed_delta_d = (time_stamps[i] - time_stamps[j]) * SOUND_SPEED
 
-        # Tahmin edilen mesafe farkı
-        dist_ref = calculate_distance(ref_mic_pos, source_pos)
-        dist_i = calculate_distance(mic_positions[i], source_pos)
-        predicted_delta_d = dist_i - dist_ref
+            # Tahmin edilen mesafe farkı
+            dist_i = calculate_distance(mic_positions[i], source_pos)
+            dist_j = calculate_distance(mic_positions[j], source_pos)
+            predicted_delta_d = dist_i - dist_j
 
-        # Kayıp hesaplaması
-        residual = observed_delta_d - predicted_delta_d
-        total_loss += residual ** 2
+            # Kayıp hesaplaması
+            residual = observed_delta_d - predicted_delta_d
+            total_loss += residual ** 2
+
+            # Hesaplama adımlarını kaydet
+            step_info = (
+                f"Çift ({i+1}, {j+1}):\n"
+                f"  Zaman Farkı (t{i+1} - t{j+1}): {time_stamps[i] - time_stamps[j]:.6f} s\n"
+                f"  Gerçek Mesafe Farkı (d{i+1} - d{j+1}): {observed_delta_d:.6f} m\n"
+                f"  Tahmini Mesafe Farkı: {predicted_delta_d:.6f} m\n"
+                f"  Kalan (Residual): {residual:.6f}\n"
+            )
+            steps.append(step_info)
+
+    # Hesaplama adımlarını global değişkene aktar
+    global calculation_steps
+    calculation_steps = "\n".join(steps)
 
     return total_loss
 
@@ -54,13 +72,21 @@ def find_sound_source(mic_positions, time_stamps):
     return result.x  # Tahmin edilen ses kaynağının koordinatları
 
 def on_click(event):
-    global source_point, estimated_point
+    global source_point, estimated_point, calculation_steps
     # Fare tıklama pozisyonu ses kaynağı olarak belirlenir
-    if event.inaxes:
+    if event.inaxes == ax:
         source_point = [event.xdata, event.ydata]
         time_stamps = np.array([calculate_distance(mic, source_point) / SOUND_SPEED for mic in mic_positions])
         estimated_point = find_sound_source(mic_positions, time_stamps)
         update_plot()
+        # Hesaplama adımlarını metin alanında güncelle
+        text_box.set_text(f"Gerçek Ses Kaynağı: ({source_point[0]:.2f}, {source_point[1]:.2f})\n"
+                          f"Tahmin Edilen Konum: ({estimated_point[0]:.2f}, {estimated_point[1]:.2f})\n\n"
+                          f"Hesaplama Adımları:\n{calculation_steps}")
+    else:
+        # Metin alanını temizle
+        calculation_steps = ""
+        text_box.set_text("")
 
 def update_plot():
     """Grafiği günceller ve ses kaynağı ile tahmini konumu gösterir."""
@@ -80,8 +106,10 @@ def update_plot():
         ax.scatter(*estimated_point, color='green', label="Tahmin Edilen Ses Kaynağı", s=100)  # Yeşil nokta küçük boyut
 
     # Eksen ayarları
-    ax.set_xlim(-20, 30)
-    ax.set_ylim(-20, 30)
+    xlim = [-20, 30]
+    ylim = [-20, 30]
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
     ax.set_xticks(np.arange(-20, 31, 5))  # X ekseninde 5 birimde bir çizgi
     ax.set_yticks(np.arange(-20, 31, 5))  # Y ekseninde 5 birimde bir çizgi
     ax.grid(True)
@@ -93,18 +121,30 @@ def update_plot():
     plt.draw()
 
 def clear(event):
-    """Tüm işaretleri temizler."""
-    global source_point, estimated_point
+    """Tüm işaretleri ve metin alanını temizler."""
+    global source_point, estimated_point, calculation_steps
     source_point = None
     estimated_point = None
+    calculation_steps = ""
+    text_box.set_text("")
     update_plot()
 
 # Grafik oluşturma
-fig, ax = plt.subplots(figsize=(8, 8))  # Grafiğin boyutunu ayarladık
+fig = plt.figure(figsize=(12, 8))
+gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
+
+# Grafik eksenleri
+ax = fig.add_subplot(gs[0])
+ax_text = fig.add_subplot(gs[1])
+ax_text.axis('off')  # Metin alanında eksenleri gizle
+
+# Metin kutusu oluşturma
+text_box = ax_text.text(0, 1, "", fontsize=10, va='top', ha='left')
+
 plt.subplots_adjust(bottom=0.2)
 
 # "Sil" butonunu ekleyin
-ax_clear = plt.axes([0.8, 0.05, 0.1, 0.075])
+ax_clear = plt.axes([0.45, 0.05, 0.1, 0.075])  # Butonun yerini ayarladık
 button_clear = Button(ax_clear, 'Sil')
 button_clear.on_clicked(clear)
 
