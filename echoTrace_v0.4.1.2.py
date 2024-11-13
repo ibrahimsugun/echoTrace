@@ -60,8 +60,8 @@ class SoundSourceLocalization3D(QMainWindow):
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111, projection='3d')
 
-        # Fare ile döndürme ayarları (sağ tık ile döndürme)
-        self.ax.mouse_init(rotate_btn=3, zoom_btn=None)
+        # Fare ile döndürme ve yakınlaştırma etkin
+        self.ax.mouse_init()
 
         # Mouse event'leri
         self.canvas.mpl_connect('button_press_event', self.on_click)
@@ -137,9 +137,7 @@ class SoundSourceLocalization3D(QMainWindow):
 
     def calculate_distance(self, mic_pos, source_pos):
         """Mikrofon ile ses kaynağı arasındaki mesafeyi hesaplar (3D)."""
-        distance = np.sqrt((mic_pos[0] - source_pos[0]) ** 2 +
-                           (mic_pos[1] - source_pos[1]) ** 2 +
-                           (mic_pos[2] - source_pos[2]) ** 2)
+        distance = np.sqrt((mic_pos[0] - source_pos[0]) ** 2 + (mic_pos[1] - source_pos[1]) ** 2 + (mic_pos[2] - source_pos[2]) ** 2)
         return max(distance, 1e-6)  # Sıfıra çok yakın değerlerde hata önleme
 
     def calculate_db(self, distance, source_db):
@@ -210,9 +208,18 @@ class SoundSourceLocalization3D(QMainWindow):
         self.canvas.draw()
 
     def on_click(self, event):
-        """Sol tık ile herhangi bir işlem yapma."""
+        """Kullanıcı grafiğe tıkladığında ses kaynağı ekler."""
+        if event.inaxes != self.ax:
+            return
         if event.button == 1:  # Sol tık
-            return  # Sol tıkta hiçbir işlem yapma
+            if event.xdata is None or event.ydata is None:
+                return
+            x = event.xdata
+            y = event.ydata
+            z = random.uniform(-10, 10)  # Z koordinatı rastgele
+            self.source_point = np.array([x, y, z])
+            self.update_plot_elements()
+            self.perform_localization()
 
     def add_random_sound_source(self):
         """Rastgele bir ses kaynağı ekler."""
@@ -302,8 +309,8 @@ class SoundSourceLocalization3D(QMainWindow):
         """Grafik öğelerini günceller (mikrofonlar, gürültü kaynakları, ses kaynakları)."""
         self.ax.clear()
         self.initial_plot()
-        # Fare ile döndürme ayarları (sağ tık ile döndürme)
-        self.ax.mouse_init(rotate_btn=3, zoom_btn=None)
+        # Fare ile döndürme ve yakınlaştırma etkin
+        self.ax.mouse_init()
 
         # Önceki ses kaynağı yazısını ve çizgileri kaldır
         if self.source_text is not None:
@@ -327,7 +334,7 @@ class SoundSourceLocalization3D(QMainWindow):
                     [self.source_point[0], mic_pos[0]],
                     [self.source_point[1], mic_pos[1]],
                     [self.source_point[2], mic_pos[2]],
-                    color='orange',
+                    color='gray',
                     linestyle='--',
                     linewidth=0.5
                 )
