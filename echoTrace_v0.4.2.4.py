@@ -236,7 +236,7 @@ class SoundSourceLocalization3D(QMainWindow):
         for building in self.buildings:
             x, y, z = building['position']
             dx, dy, dz = building['size']
-            self.ax.bar3d(x, y, z, dx, dy, dz, color='brown', alpha=0.5, shade=True, edgecolor='black')
+            self.ax.bar3d(x, y, z, dx, dy, dz, color='brown', alpha=0.8, shade=True, edgecolor='black')
 
         # Gerçek Ses Kaynağı (Başlangıçta boş)
         self.source_scatter = self.ax.scatter([], [], [], color='red', label="Gerçek Ses Kaynağı", s=300, marker='o', edgecolors='black', linewidths=1)
@@ -424,9 +424,9 @@ class SoundSourceLocalization3D(QMainWindow):
         self.ax.zaxis.pane.set_facecolor((0.75, 0.75, 0.75, 1.0))  # Açık gri
 
         # Grid çizgilerinin renklerini ayarla
-        self.ax.xaxis._axinfo["grid"]["color"] = "lightgrey"
-        self.ax.yaxis._axinfo["grid"]["color"] = "lightgrey"
-        self.ax.zaxis._axinfo["grid"]["color"] = "lightgrey"
+        self.ax.xaxis._axinfo["grid"]["color"] = "grey"
+        self.ax.yaxis._axinfo["grid"]["color"] = "grey"
+        self.ax.zaxis._axinfo["grid"]["color"] = "grey"
 
         # Gerçek Ses Kaynağı
         if self.source_point is not None:
@@ -445,17 +445,17 @@ class SoundSourceLocalization3D(QMainWindow):
                 blocked = self.is_path_blocked(self.source_point, mic_pos)
                 if blocked:
                     color = 'red'
-                    linestyle = '--'
+                    linestyle = 'dashdot'
                 else:
                     color = 'gray'
-                    linestyle = '-'
+                    linestyle = '--'
                 line, = self.ax.plot(
                     [self.source_point[0], mic_pos[0]],
                     [self.source_point[1], mic_pos[1]],
                     [self.source_point[2], mic_pos[2]],
                     color=color,
                     linestyle=linestyle,
-                    linewidth=0.5
+                    linewidth=0.7
                 )
                 self.source_to_mic_lines.append(line)
         else:
@@ -469,8 +469,8 @@ class SoundSourceLocalization3D(QMainWindow):
             offset = 0.5
             self.estimated_text = self.ax.text(
                 x, y, z + offset,
-                'Tahmin', color='green', fontsize=8,
-                ha='center', va='bottom'
+                'Tahmin', color='green', fontsize=9,
+                ha='left', va='bottom'
             )
         else:
             self.estimated_scatter._offsets3d = ([], [], [])
