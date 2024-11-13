@@ -63,16 +63,6 @@ class SoundSourceLocalization3D(QMainWindow):
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111, projection='3d')
 
-        # Arka plan panellerinin renklerini ayarla
-        self.ax.xaxis.pane.set_facecolor((0.95, 0.95, 0.95, 1.0))  # Çok açık gri
-        self.ax.yaxis.pane.set_facecolor((0.88, 0.88, 0.88, 1.0))  # Daha açık gri
-        self.ax.zaxis.pane.set_facecolor((0.75, 0.75, 0.75, 1.0))  # Açık gri
-
-        # Grid çizgilerinin renklerini ayarla
-        self.ax.xaxis._axinfo["grid"]["color"] = "lightgrey"
-        self.ax.yaxis._axinfo["grid"]["color"] = "lightgrey"
-        self.ax.zaxis._axinfo["grid"]["color"] = "lightgrey"
-
         # Fare ile döndürme ayarları (sağ tık ile döndürme)
         self.ax.mouse_init(rotate_btn=3, zoom_btn=None)
 
@@ -134,50 +124,6 @@ class SoundSourceLocalization3D(QMainWindow):
         positions = np.column_stack((x_coords, y_coords, z_coords))
         return positions
 
-    def generate_random_noise_source(self):
-        """Rastgele bir konum ve desibel değeri ile ambient gürültü kaynağı oluşturur (3D)."""
-        x = random.uniform(-15, 25)
-        y = random.uniform(-15, 25)
-        z = random.uniform(-10, 10)
-        # Desibel değeri 60 dB ile 90 dB arasında rastgele seçilir
-        db = random.uniform(60, 90)
-        return {'position': np.array([x, y, z]), 'db': db}
-
-    def generate_multiple_noise_sources(self, count=2):
-        """Belirli sayıda rastgele ambient gürültü kaynağı oluşturur."""
-        noise_sources = []
-        for _ in range(count):
-            noise_sources.append(self.generate_random_noise_source())
-        return noise_sources
-
-    def generate_buildings(self, count):
-        """Belirli sayıda rastgele bina oluşturur."""
-        buildings = []
-        for _ in range(count):
-            width = random.uniform(5, 10)
-            depth = random.uniform(5, 10)
-            height = random.uniform(5, 10)
-            x = random.uniform(-15, 25 - width)
-            y = random.uniform(-15, 25 - depth)
-            z = 0  # Binalar zeminde başlar
-            buildings.append({'position': (x, y, z), 'size': (width, depth, height)})
-        return buildings
-
-    def calculate_distance(self, mic_pos, source_pos):
-        """Mikrofon ile ses kaynağı arasındaki mesafeyi hesaplar (3D)."""
-        distance = np.sqrt((mic_pos[0] - source_pos[0]) ** 2 +
-                           (mic_pos[1] - source_pos[1]) ** 2 +
-                           (mic_pos[2] - source_pos[2]) ** 2)
-        return max(distance, 1e-6)  # Sıfıra çok yakın değerlerde hata önleme
-
-    def calculate_db(self, distance, source_db):
-        """Verilen mesafeye ve kaynak desibeline göre desibel değerini hesaplar."""
-        if distance <= 0:
-            return source_db  # Maksimum desibel
-        # Desibel azalması: dB = kaynak_dB - 20 * log10(r)
-        db = source_db - 20 * math.log10(distance)
-        return db
-
     def initial_plot(self):
         """Başlangıç grafiğini oluşturur ve öğelerin referanslarını saklar."""
         self.ax.set_title('3D Ses Kaynağı Simülasyonu')
@@ -191,6 +137,11 @@ class SoundSourceLocalization3D(QMainWindow):
         self.ax.set_ylim(ylim)
         self.ax.set_zlim(zlim)
 
+        # Izgaraları X, Y, Z eksenlerinde farklı gri tonlarında yapıyoruz
+        self.ax.xaxis._axinfo['grid'].update({'color': (0.9, 0.9, 0.9, 0.8)})
+        self.ax.yaxis._axinfo['grid'].update({'color': (0.85, 0.85, 0.85, 0.8)})
+        self.ax.zaxis._axinfo['grid'].update({'color': (0.8, 0.8, 0.8, 0.8)})
+
         # Grafiğin başlangıç görünümünü çaprazdan ayarla
         self.ax.view_init(elev=30, azim=-60)  # İstediğiniz açıları ayarlayabilirsiniz
 
@@ -203,52 +154,18 @@ class SoundSourceLocalization3D(QMainWindow):
             text = self.ax.text(pos[0], pos[1], pos[2], f'M{i+1}', fontsize=8, ha='right', va='bottom')
             self.mic_texts.append(text)
 
-        # Ambient Gürültü Bilgisi bölümünü temizle
-        for i in reversed(range(self.noise_info_layout.count())):
-            widget_to_remove = self.noise_info_layout.itemAt(i).widget()
-            self.noise_info_layout.removeWidget(widget_to_remove)
-            widget_to_remove.setParent(None)
-
-        # Ambient Gürültü Kaynakları
-        for idx, noise in enumerate(self.noise_sources, start=1):
-            # Marker boyutunu dB seviyesine göre ayarla (60-90 dB arasında 50-150 büyüklük)
-            marker_size = 50 + (noise['db'] - 60) * 2
-            scatter = self.ax.scatter(
-                noise['position'][0], noise['position'][1], noise['position'][2],
-                color='orange',
-                label=f"Ambient Gürültü {idx}" if idx == 1 else "",
-                s=marker_size,
-                marker='x'
-            )
-            self.noise_scatter.append(scatter)
-            # Desibel seviyesini marker'ın yanında göster
-            text = self.ax.text(
-                noise['position'][0], noise['position'][1], noise['position'][2],
-                f' {noise["db"]:.1f} dB', color='orange', fontsize=8,
-                ha='left', va='center'
-            )
-            self.noise_texts.append(text)
-            # Gürültü bilgilerini kontrol paneline ekle
-            noise_info = QLabel(f"Gürültü {idx}: Konum=({noise['position'][0]:.2f}, {noise['position'][1]:.2f}, {noise['position'][2]:.2f}), dB={noise['db']:.2f}")
-            self.noise_info_layout.addWidget(noise_info)
-
-        # Binaları çiz
-        for building in self.buildings:
-            x, y, z = building['position']
-            dx, dy, dz = building['size']
-            self.ax.bar3d(x, y, z, dx, dy, dz, color='brown', alpha=0.5, shade=True, edgecolor='black')
-
         # Gerçek Ses Kaynağı (Başlangıçta boş)
-        self.source_scatter = self.ax.scatter([], [], [], color='red', label="Gerçek Ses Kaynağı", s=300, marker='o', edgecolors='black', linewidths=1)
+        self.source_scatter = self.ax.scatter([], [], [], color='red', label="Gerçek Ses Kaynağı", s=300, edgecolors='yellow', linewidths=2, alpha=1.0)
         self.source_text = None  # Başlangıçta None
 
         # Tahmin Edilen Ses Kaynağı (Başlangıçta boş)
-        self.estimated_scatter = self.ax.scatter([], [], [], color='green', label="Tahmin Edilen Ses Kaynağı", s=200, marker='o', edgecolors='black', linewidths=1)
+        self.estimated_scatter = self.ax.scatter([], [], [], color='green', label="Tahmin Edilen Ses Kaynağı", s=100)
         self.estimated_text = None  # Başlangıçta None
 
         self.ax.legend(loc='upper right', fontsize=8)
         self.canvas.draw()
 
+    # Geri kalan metotlar aynı kalacak (on_click, add_random_sound_source, vb.)
     def on_click(self, event):
         """Sol tık ile herhangi bir işlem yapma."""
         if event.button == 1:  # Sol tık
@@ -418,15 +335,15 @@ class SoundSourceLocalization3D(QMainWindow):
         # Fare ile döndürme ayarları (sağ tık ile döndürme)
         self.ax.mouse_init(rotate_btn=3, zoom_btn=None)
 
-        # Arka plan panellerinin renklerini tekrar ayarla
-        self.ax.xaxis.pane.set_facecolor((0.95, 0.95, 0.95, 1.0))  # Çok açık gri
-        self.ax.yaxis.pane.set_facecolor((0.88, 0.88, 0.88, 1.0))  # Daha açık gri
-        self.ax.zaxis.pane.set_facecolor((0.75, 0.75, 0.75, 1.0))  # Açık gri
+        # Önceki ses kaynağı yazısını ve çizgileri kaldır
+        if self.source_text is not None:
+            self.source_text.remove()
+            self.source_text = None
 
-        # Grid çizgilerinin renklerini ayarla
-        self.ax.xaxis._axinfo["grid"]["color"] = "lightgrey"
-        self.ax.yaxis._axinfo["grid"]["color"] = "lightgrey"
-        self.ax.zaxis._axinfo["grid"]["color"] = "lightgrey"
+        # Ses kaynağından mikrofonlara çizilen çizgileri kaldır
+        for line in self.source_to_mic_lines:
+            line.remove()
+        self.source_to_mic_lines = []
 
         # Gerçek Ses Kaynağı
         if self.source_point is not None:
@@ -461,7 +378,12 @@ class SoundSourceLocalization3D(QMainWindow):
         else:
             self.source_scatter._offsets3d = ([], [], [])
 
-        # Tahmin Edilen Ses Kaynağı (En üstte gözükecek şekilde en son çiziliyor)
+        # Önceki tahmin yazısını kaldır
+        if self.estimated_text is not None:
+            self.estimated_text.remove()
+            self.estimated_text = None
+
+        # Tahmin Edilen Ses Kaynağı
         if self.estimated_point is not None:
             self.estimated_scatter._offsets3d = (self.estimated_point[0:1], self.estimated_point[1:2], self.estimated_point[2:3])
             x, y, z = self.estimated_point
@@ -475,12 +397,11 @@ class SoundSourceLocalization3D(QMainWindow):
         else:
             self.estimated_scatter._offsets3d = ([], [], [])
 
-        # Güncellenmiş çizimleri ekrana yansıt
         self.canvas.draw_idle()
-
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     ex = SoundSourceLocalization3D()
     ex.show()
     sys.exit(app.exec_())
+
