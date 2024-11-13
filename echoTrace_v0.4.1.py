@@ -195,11 +195,11 @@ class SoundSourceLocalization3D(QMainWindow):
 
         # Gerçek Ses Kaynağı (Başlangıçta boş)
         self.source_scatter = self.ax.scatter([], [], [], color='red', label="Gerçek Ses Kaynağı", s=200)
-        self.source_text = self.ax.text(0, 0, 0, '', color='red', fontsize=10, ha='left', va='center', rotation_mode='anchor')
+        self.source_text = self.ax.text(0, 0, 0, '', color='red', fontsize=10, ha='left', va='center')
 
         # Tahmin Edilen Ses Kaynağı (Başlangıçta boş)
         self.estimated_scatter = self.ax.scatter([], [], [], color='green', label="Tahmin Edilen Ses Kaynağı", s=100)
-        self.estimated_text = self.ax.text(0, 0, 0, '', color='green', fontsize=8, ha='left', va='center', rotation_mode='anchor')
+        self.estimated_text = self.ax.text(0, 0, 0, '', color='green', fontsize=8, ha='left', va='center')
 
         self.ax.legend(loc='upper right', fontsize=8)
         self.canvas.draw()
@@ -316,7 +316,6 @@ class SoundSourceLocalization3D(QMainWindow):
             self.source_text.set_3d_properties(self.source_point[2], 'z')
             x, y, z = self.source_point
             self.source_text.set_text(f'  ({x:.2f}, {y:.2f}, {z:.2f})')
-            self.source_text.set_rotation(0)
         else:
             self.source_scatter._offsets3d = ([], [], [])
             self.source_text.set_text('')
@@ -327,7 +326,6 @@ class SoundSourceLocalization3D(QMainWindow):
             self.estimated_text.set_position((self.estimated_point[0], self.estimated_point[1]))
             self.estimated_text.set_3d_properties(self.estimated_point[2], 'z')
             self.estimated_text.set_text(f'  Tahmin')
-            self.estimated_text.set_rotation(0)
         else:
             self.estimated_scatter._offsets3d = ([], [], [])
             self.estimated_text.set_text('')

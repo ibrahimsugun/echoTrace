@@ -28,6 +28,7 @@ class SoundSourceLocalization3D(QMainWindow):
         self.source_point = None
         self.estimated_point = None
         self.calculation_steps = ""
+        self.picked_mic = None
         self.average_db = None  # Ortalama desibel değeri
 
         # Ambient Gürültü Kaynakları (3 Boyutlu)
@@ -42,6 +43,9 @@ class SoundSourceLocalization3D(QMainWindow):
         self.source_text = None
         self.estimated_scatter = None
         self.estimated_text = None
+        self.lines_main = []
+        self.lines_noise = []
+        self.lines_estimated = []
 
         self.initUI()
         self.initial_plot()
@@ -57,8 +61,10 @@ class SoundSourceLocalization3D(QMainWindow):
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111, projection='3d')
 
-        # Fare ile döndürme ve yakınlaştırma etkin
-        self.ax.mouse_init()
+        # Tahtanın boyutu ve yönü fare tıklamaları ile değişmeyecek
+        self.ax.mouse_init(rotate_btn=None, zoom_btn=None)
+        if self.canvas.manager is not None:
+            self.canvas.mpl_disconnect(self.canvas.manager.key_press_handler_id)
 
         # Mouse event'leri
         self.canvas.mpl_connect('button_press_event', self.on_click)
@@ -80,11 +86,6 @@ class SoundSourceLocalization3D(QMainWindow):
         self.randomize_button = QPushButton('Rastgele Pozisyon')
         self.randomize_button.clicked.connect(self.randomize_positions)
         control_layout.addWidget(self.randomize_button)
-
-        # "Rastgele Ses Kaynağı" butonu - Rastgele bir ses kaynağı ekler
-        self.random_source_button = QPushButton('Rastgele Ses Kaynağı')
-        self.random_source_button.clicked.connect(self.add_random_sound_source)
-        control_layout.addWidget(self.random_source_button)
 
         # Hesaplama Adımları
         self.text_box = QTextEdit()
@@ -145,6 +146,24 @@ class SoundSourceLocalization3D(QMainWindow):
         db = source_db - 20 * math.log10(distance)
         return db
 
+    def compute_total_db_per_mic(self, source_points):
+        """
+        Her mikrofon için tüm kaynaklardan gelen desibel değerlerini logaritmik olarak birleştirir.
+        source_points: List of dictionaries with 'position' and 'db' keys.
+        """
+        total_db_per_mic = []
+        for mic in self.mic_positions:
+            total_power = 0
+            for source in source_points:
+                distance = self.calculate_distance(mic, source['position'])
+                db = self.calculate_db(distance, source['db'])
+                power = 10 ** (db / 10)
+                total_power += power
+            total_db = 10 * math.log10(total_power) if total_power > 0 else 0
+            total_db_per_mic.append(total_db)
+        average_db = np.mean(total_db_per_mic) if total_db_per_mic else 0
+        return average_db
+
     def initial_plot(self):
         """Başlangıç grafiğini oluşturur ve öğelerin referanslarını saklar."""
         self.ax.set_title('3D Ses Kaynağı Simülasyonu')
@@ -158,8 +177,8 @@ class SoundSourceLocalization3D(QMainWindow):
         self.ax.set_ylim(ylim)
         self.ax.set_zlim(zlim)
 
-        # Grafiğin başlangıç görünümünü çaprazdan ayarla
-        self.ax.view_init(elev=30, azim=-60)  # İstediğiniz açıları ayarlayabilirsiniz
+        # Grafiği yukarıdan görünüm ile sabitle
+        self.ax.view_init(elev=90, azim=-90)
 
         # Mikrofonlar ve etiketler
         self.mic_scatter = self.ax.scatter(
@@ -189,17 +208,14 @@ class SoundSourceLocalization3D(QMainWindow):
                 ha='left', va='center'
             )
             self.noise_texts.append(text)
-            # Gürültü bilgilerini kontrol paneline ekle
-            noise_info = QLabel(f"Gürültü {idx}: Konum=({noise['position'][0]:.2f}, {noise['position'][1]:.2f}, {noise['position'][2]:.2f}), dB={noise['db']:.2f}")
-            self.noise_info_layout.addWidget(noise_info)
 
         # Gerçek Ses Kaynağı (Başlangıçta boş)
         self.source_scatter = self.ax.scatter([], [], [], color='red', label="Gerçek Ses Kaynağı", s=200)
-        self.source_text = self.ax.text(0, 0, 0, '', color='red', fontsize=10, ha='left', va='center', rotation_mode='anchor')
+        self.source_text = self.ax.text(0, 0, 0, '', color='red', fontsize=10, ha='left', va='center')
 
         # Tahmin Edilen Ses Kaynağı (Başlangıçta boş)
         self.estimated_scatter = self.ax.scatter([], [], [], color='green', label="Tahmin Edilen Ses Kaynağı", s=100)
-        self.estimated_text = self.ax.text(0, 0, 0, '', color='green', fontsize=8, ha='left', va='center', rotation_mode='anchor')
+        self.estimated_text = self.ax.text(0, 0, 0, '', color='green', fontsize=8, ha='left', va='center')
 
         self.ax.legend(loc='upper right', fontsize=8)
         self.canvas.draw()
@@ -213,19 +229,10 @@ class SoundSourceLocalization3D(QMainWindow):
                 return
             x = event.xdata
             y = event.ydata
-            z = random.uniform(-10, 10)  # Z koordinatı rastgele
+            z = 0  # Z koordinatı sabit 0
             self.source_point = np.array([x, y, z])
             self.update_plot_elements()
             self.perform_localization()
-
-    def add_random_sound_source(self):
-        """Rastgele bir ses kaynağı ekler."""
-        x = random.uniform(-15, 25)
-        y = random.uniform(-15, 25)
-        z = random.uniform(-10, 10)  # Z koordinatı rastgele
-        self.source_point = np.array([x, y, z])
-        self.update_plot_elements()
-        self.perform_localization()
 
     def perform_localization(self):
         """Ses kaynağının yerini tahmin eder."""
@@ -236,23 +243,17 @@ class SoundSourceLocalization3D(QMainWindow):
         source_points = [{'position': self.source_point, 'db': 100}]  # Kaynak dB değeri varsayılan 100 dB
         source_points.extend(self.noise_sources)
         measured_db = []
-        self.calculation_steps = ""  # Hesaplama adımlarını sıfırla
-        self.calculation_steps += "Mikrofonlarda Ölçülen dB Değerleri:\n"
-
-        for idx_mic, mic in enumerate(self.mic_positions):
+        for mic in self.mic_positions:
             total_power = 0
-            self.calculation_steps += f"\nMikrofon {idx_mic + 1}:\n"
             for source in source_points:
                 distance = self.calculate_distance(mic, source['position'])
                 db = self.calculate_db(distance, source['db'])
                 power = 10 ** (db / 10)
                 total_power += power
-                self.calculation_steps += f"  Kaynak ({source['position'][0]:.2f}, {source['position'][1]:.2f}, {source['position'][2]:.2f}), Mesafe: {distance:.2f} m, dB: {db:.2f}\n"
             total_db = 10 * math.log10(total_power) if total_power > 0 else 0
             measured_db.append(total_db)
-            self.calculation_steps += f"  Toplam dB: {total_db:.2f}\n"
         self.average_db = np.mean(measured_db)
-        self.calculation_steps += f"\nOrtalama dB: {self.average_db:.2f}\n"
+        self.calculation_steps = f"Ortalama dB: {self.average_db:.2f}\n"
 
         # Ses kaynağının yerini tahmin et
         def objective_function(pos):
@@ -275,7 +276,7 @@ class SoundSourceLocalization3D(QMainWindow):
         x0 = np.array([0, 0, 0])
         res = minimize(objective_function, x0, method='BFGS')
         self.estimated_point = res.x
-        self.calculation_steps += f"\nTahmin Edilen Konum: ({self.estimated_point[0]:.2f}, {self.estimated_point[1]:.2f}, {self.estimated_point[2]:.2f})\n"
+        self.calculation_steps += f"Tahmin Edilen Konum: {self.estimated_point}\n"
         self.text_box.setPlainText(self.calculation_steps)
         self.update_plot_elements()
 
@@ -306,17 +307,33 @@ class SoundSourceLocalization3D(QMainWindow):
         """Grafik öğelerini günceller (mikrofonlar, gürültü kaynakları, ses kaynakları)."""
         self.ax.clear()
         self.initial_plot()
-        # Fare ile döndürme ve yakınlaştırma etkin
-        self.ax.mouse_init()
+
+        # Güncellenmiş mikrofon scatter
+        self.mic_scatter._offsets3d = (self.mic_positions[:, 0], self.mic_positions[:, 1], self.mic_positions[:, 2])
+
+        # Mikrofon etiketlerini güncelle
+        for i, pos in enumerate(self.mic_positions):
+            self.mic_texts[i].set_position((pos[0], pos[1]))
+            self.mic_texts[i].set_3d_properties(pos[2], 'z')
+
+        # Ambient Gürültü Kaynakları
+        for idx, noise in enumerate(self.noise_sources):
+            # Güncellenmiş pozisyon
+            self.noise_scatter[idx]._offsets3d = (noise['position'][0:1], noise['position'][1:2], noise['position'][2:3])
+            # Marker boyutunu dB seviyesine göre ayarla
+            marker_size = 50 + (noise['db'] - 60) * 2
+            self.noise_scatter[idx].set_sizes([marker_size])
+            # Desibel etiketi
+            self.noise_texts[idx].set_position((noise['position'][0], noise['position'][1]))
+            self.noise_texts[idx].set_3d_properties(noise['position'][2], 'z')
+            self.noise_texts[idx].set_text(f' {noise["db"]:.1f} dB')
 
         # Gerçek Ses Kaynağı
         if self.source_point is not None:
             self.source_scatter._offsets3d = (self.source_point[0:1], self.source_point[1:2], self.source_point[2:3])
             self.source_text.set_position((self.source_point[0], self.source_point[1]))
             self.source_text.set_3d_properties(self.source_point[2], 'z')
-            x, y, z = self.source_point
-            self.source_text.set_text(f'  ({x:.2f}, {y:.2f}, {z:.2f})')
-            self.source_text.set_rotation(0)
+            self.source_text.set_text(f'  {100:.2f} dB')  # Varsayılan dB değeri
         else:
             self.source_scatter._offsets3d = ([], [], [])
             self.source_text.set_text('')
@@ -327,7 +344,6 @@ class SoundSourceLocalization3D(QMainWindow):
             self.estimated_text.set_position((self.estimated_point[0], self.estimated_point[1]))
             self.estimated_text.set_3d_properties(self.estimated_point[2], 'z')
             self.estimated_text.set_text(f'  Tahmin')
-            self.estimated_text.set_rotation(0)
         else:
             self.estimated_scatter._offsets3d = ([], [], [])
             self.estimated_text.set_text('')
