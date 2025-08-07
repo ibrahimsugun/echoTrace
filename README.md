@@ -179,7 +179,7 @@ You can change the 3D perspective by holding right click and dragging the graph.
 
 ## 📝 License
 
-This project is developed for hobbie.
+This project is developed for personal hobbie.
 
 ## 👥 Contact
 
